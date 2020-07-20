@@ -1,0 +1,305 @@
+---
+title: "Infogears COVID Data Analysis"
+author: 'Sergey Stepanyan'
+output: pdf_document
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F, message = F, warning = F)
+library(ggplot2)
+library(dplyr)
+library(stringr)
+
+```
+
+
+
+## The problem/data description
+
+This report is being performed during the COVID pandemic which started in the first quarter of 2020.
+As it continues, it is important to understand the patterns which emerge as a result of the outbreak.
+
+The data is provided by Infogears.org. It is a project made possible by the partnership between NetGenix Inc. and Instigate Mobile.
+Data collection is organized by a questionaire on the Infogears website, where users fill in the relevant information (eg. what symptoms do they have, have they been tested or not, etc.) and send it for processing.
+
+The dataset includes information about a person's symptoms, what their exposure level is, their gender, number of residents in their household, the mental health impact of the pandemic, whether or not they conducted an antibody and virus  test, how often they wear a mask and their age group.
+
+The data was filtered to exclude some misinforming results, duplicate entries and to generally place the data into a more presentable format (converting date strings into Date variables, etc.)
+
+
+
+
+```{r fig.width=4, fig.height=4}
+#Chunk to load the data, and perform rudimentary filtering 
+
+infogears <- read.csv('covid-07-13-2020.csv')
+
+infogears$guid <- NULL
+infogears$id <- NULL
+colnames(infogears)[1] <- "age"
+infogears$X.age <- NULL
+
+#convert to POSIXct format for easier access
+infogears$createdAt <- as.POSIXct(infogears$createdAt,format = '%d-%m-%y %H:%M')
+infogears$updatedAt <- as.POSIXct(infogears$updatedAt,format = '%d-%m-%y %H:%M')
+infogears$createDate <- as.Date(infogears$createdAt)
+
+#Only select numeric zip codes, and small headcounts
+infogears <- infogears %>% filter(householdHeadcount>0,householdHeadcount< 14,str_detect(zipCode,"^[0-9]+$"))
+
+#Create additional columns for ranking symptoms and amount of leaves
+infogears$symptomSeverity <- rowSums(infogears[c('bodyAche','diarrhea','difficultyBreathing',
+                                                 'disorientation','fatigue','headAche','irritatedEyes',
+                                                 'lossOfSmell','persistentCough','soreThroat','temperature')])
+infogears$leaveCount <- rowSums(infogears[c('leftForExercise','leftForOther',
+                                            'leftForShopping','leftForWork')])
+  
+
+
+#Rename Age groups for better aesthetics.
+
+infogears$age <- plyr::revalue(infogears$age, c("interval_13_17"="13 to 17", "interval_18_25"="18 to 25",
+                                 "interval_26_35"="26 to 35","interval_36_45"="36 to 45",
+                                 "interval_46_55"="46 to 55","interval_56_65"="56 to 65",
+                                 "interval_66_75"="66 to 75","interval_75_and_more"="75 and older"))
+
+#Remove entries with fractions in household headcount
+infogears <- infogears[infogears$householdHeadcount%%1==0,]
+
+#make headcount factor for graph convenience
+infogears$householdHeadcount <- as.factor(infogears$householdHeadcount)
+
+#Remove duplicate entries
+infogears <- unique(infogears) 
+
+```
+
+## Main hypotheses
+**1. Generally the younger demographics have more symptoms.**
+
+**2. From the people with the virus, older age groups are more likely to have symptoms, while younger ones are more likely to be asymptomatic.**
+
+**3. More than 30 percent of virus "positive" cases have no symptoms.**
+
+**4. The more severe the symptoms the more likely it is the person went to be tested. More people got tested over time.**
+
+**5. Households with larger sizes are more likely to get infected. Inconclusive, since not enough data is available.**
+
+**6. Mental health impact by age group. Youngest age demographic has had the least effect on mental health.**
+
+**7. Mental health impact by gender. Females were impacted by the pandemic more than males.**
+
+**8. People who never wear masks have had less mental impact than those who wear them.**
+
+
+
+
+
+
+\newpage
+
+## Analysis
+
+
+### 1. Generally the younger demographics have more symptoms.
+For this hypothesis, we are going to look at 8 different ages groups. In order to show the data, for each age group the average amount of symptoms was taken.
+
+```{r  fig.width=4, fig.height=4}
+
+infogears %>%
+  
+  group_by(age)%>%
+  summarise(avgSeverity = mean(symptomSeverity,na.rm = T))%>%
+ggplot(aes(x=reorder(age,avgSeverity),y=avgSeverity,fill=age))+ geom_bar(stat="identity",)+
+  labs(x="Age groups",y="Avg. Symptom severity",title="Symptom severity score VS age group")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=5))
+
+```  
+
+From this picture, we can see that in in general older age groups have a lower average for the amount of symptoms, and the highest average is by "13 to 17" age group.
+This can be explained, by the lower age groups "less experienced" immune system. For instance, the older people may have had more illnesses in the past and are more prepared for the pandemic. It is also possible that given date which includes older folks, the picture would reverse, as the immune system of the more elderly would be less capable of defense.
+
+\newpage
+
+### 2. From the people with the virus, older age groups are more likely to have symptoms, while younger ones are more likely to be asymptomatic.
+
+Taking the same age groups, we can also try to understand the correlation between asymptomatic and symptomatic people, having been tested positive for the virus.
+
+```{r  fig.width=4, fig.height=4}
+
+infogears %>%
+  mutate(gotTested=ifelse(virusTest=="positive"|antibodyTest=="positive","positive",
+                        ifelse(virusTest=="negative"|antibodyTest=="negative","negative",NA)))%>%
+  na.omit()%>%
+  filter(gotTested=="positive")%>%
+  mutate(noSymptoms = ifelse(noSymptoms==1,"No Symptoms","Has Symptoms"))%>%
+ggplot(aes(x=age,fill=noSymptoms))+ geom_bar(position='fill')+
+  labs(x="Age groups",y="Having/Not having symptom ratio",title="Ratio of having symptoms between ages")+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=5))#+facet_grid(.~gotTested)
+
+```
+
+By the graph, we can tell that the "18 to 25 " age group has the lowest proportion of symptomatic cases, and on the contrary the "75 and older" category has the largest proportion.  
+
+\newpage
+
+### 3. More than 30 percent of virus "positive" cases have no symptoms.
+
+We are going to look through the data points where the virus test and antibody test results have been positive, using this information let's construct the ratio between the symptomatic and asymptomatic cases.
+
+```{r  fig.width=4, fig.height=4}
+
+#Calculate number of positive cases
+positive <-infogears %>%
+  mutate(gotTested=ifelse(virusTest=="positive"|antibodyTest=="positive","positive",
+                        ifelse(virusTest=="negative"|antibodyTest=="negative","negative",NA)))%>%
+  na.omit()%>%
+  filter(gotTested=="positive")
+
+#Calculate percentage
+noS_percent = round (100 * (1-nrow(positive[positive$noSymptoms==1,])/nrow(positive[positive$noSymptoms==0,])))
+withS_percent = 100 - noS_percent
+noS_percent = paste(noS_percent,"%")
+withS_percent = paste(withS_percent,"%")
+
+#Draw the graph
+infogears %>%
+  mutate(gotTested=ifelse(virusTest=="positive"|antibodyTest=="positive","positive",
+                        ifelse(virusTest=="negative"|antibodyTest=="negative","negative",NA)))%>%
+  na.omit()%>%
+  #Filter to include positive cases only
+  filter(gotTested=="positive")%>%
+   mutate(noSymptoms = ifelse(noSymptoms==1,"No Symptoms","Has Symptoms"))%>%
+  ggplot(aes(x=factor(1),fill=noSymptoms))+geom_bar(width=1)+
+  coord_polar("y")+
+  theme(axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        panel.grid  = element_blank())+
+  labs(x="",y="",title="Ratio of asymptomatic cases")+
+  geom_text(aes(y=30,label=noS_percent,fontface=1))
+
+
+
+```
+
+As we see from the graph above a large enough proportion (about 30 percent) of positive cases is asymptomatic. This result is including all age groups this time.
+
+\newpage
+
+### 4. The more severe the symptoms the more likely it is the person went to be tested. More people got tested over time.
+
+Next, we are going to look through the cases when the person went and had any kind of test taken (be it antibody or virus test). 
+
+
+```{r  fig.width=4, fig.height=4}
+
+infogears %>%
+  
+  mutate(weekNum = strftime(createdAt,format="%V"))%>%
+    mutate(gotTested=ifelse(virusTest%in%c("awaitingResults","negative","positive")|antibodyTest%in%c("negative","positive"),"Tested","Not tested")) %>%
+    ggplot(aes(x=weekNum,fill=gotTested))+geom_bar(position="fill")+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=5))+
+    labs(x="Week number",title="Ratio of people getting tested or not ")+
+    facet_grid(.~noSymptoms,labeller=labeller(noSymptoms=c("0"="Has symptoms","1"="No symptoms")))
+
+
+```
+
+Judging by the result, it is safe to say that the vast majority of people without symptoms aren't tested and even the symptomatic people mostly also aren't tested. From the graph, we notice that more people get tested, if they actually have symptoms and in fact, a larger portion got tested over time.
+
+\newpage
+
+### 5. Households with larger sizes are more likely to get infected. Inconclusive, since not enough data is available.
+
+Let's look through data samples, where the household sizes are larger. Assuming that the chances of a person from a larger family going outside and getting infected, lets test if this is the case.
+
+```{r  fig.width=4, fig.height=4}
+
+infogears %>%
+  
+  mutate(gotTested=ifelse(virusTest=="positive"|antibodyTest=="positive","positive",
+                        ifelse(virusTest=="negative"|antibodyTest=="negative","negative",NA)))%>%
+  na.omit()%>%
+ ggplot(aes(x=householdHeadcount,fill=gotTested))+geom_bar(position="fill")+
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=5))+
+    labs(x="Household size",title="Ratio of people getting infected ")
+```
+
+From the first graph, we see that there seems to be an emerging pattern, but the as the household size gets larger it becomes more and more difficult to justify this hypothesis. 
+
+```{r  fig.width=3, fig.height=3}
+infogears %>%
+  filter(virusTest=="positive"|antibodyTest=="positive")%>%
+  group_by(householdHeadcount)%>%
+  summarise(posCount=n())%>%
+ ggplot(aes(x=reorder(householdHeadcount,posCount),y=posCount))+geom_bar(stat="identity",position="dodge")+
+    labs(x="Household size",title="Datapoints for family size ",y="count")+coord_cartesian(ylim=c(1,80))
+
+```
+
+Therefore, from the second graph which shows the amount of observations for the households, we can say that this hypothesis is rather inconclusive as not enough datapoints are available. 
+
+\newpage
+
+### 6. Mental health impact by age group. Youngest age demographic has had the least effect on mental health.
+
+Once again, let's turn our attention the different age groups and see how the pandemic affected the mental health of the population.
+
+```{r  fig.width=4, fig.height=4}
+infogears %>%
+ggplot(aes(x=age,fill=mentalHealthImpact))+geom_bar(position='fill')+
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=5))+
+   labs(x="Age groups",y="Ratio of impact",title="Mental health impact by age")
+  
+  
+```
+
+From the data we can tell, that the least effect was on the "13 to 17" age group, while the most significant impact was on the "26 to 35" age group.
+
+
+
+### 7. Mental health impact by gender. Females were impacted by the pandemic more than males.
+
+Looking through the mental impacts, moving on to the gender. 
+
+```{r  fig.width=4, fig.height=4}
+
+infogears%>%
+  filter(gender=="male"|gender=="female")%>%
+  ggplot(aes(x=factor(1),fill=mentalHealthImpact))+geom_bar(width=1,position='fill',)+
+  coord_polar("y")+
+  theme(axis.text = element_blank(),
+        axis.ticks = element_blank(),
+        panel.grid  = element_blank())+
+  labs(x="",y="",title="Mental health impact by gender")+
+  facet_grid(.~gender)
+
+```
+
+We can see that males, by proportion, are less likely to be mentally impacted by the pandemic.
+
+
+### 8. People who never wear masks have had less mental impact than those who wear them.
+
+In the category of protection, we can see from the data, that there is a connection between the people not impacted by the pandemic and those not wearing a mask.
+
+```{r  fig.width=4, fig.height=4}
+  
+  infogears%>%
+  filter(gender=="male"|gender=="female")%>%
+  filter(householdHeadcount %in% c(1:7),faceCovering!="")%>%
+  na.omit()%>%
+  ggplot(aes(x=faceCovering,fill=mentalHealthImpact))+geom_bar(position='fill')+ 
+    theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,size=5))+
+    labs(x="Frequency of wearing a mask",y="Ratio of mental  impact",title="Wearing a mask VS mental impact")
+
+```
+
+
+## Summary of findings and recommendatins if any
+  1. Most people regardless whether or not they have symptoms, didn't get tested.
+  2. People are getting tested more, but the data currently shows that the progress isn't fast.
+  3. Those who aren't phased mentally by the pandemic are wearing masks the least.
+
